@@ -1,4 +1,5 @@
 import type { Filters, Game, Period, SeasonStore, ShotEvent, Strength } from './types';
+import { COORD_SPACE_VERT_HALF } from './types';
 import { ensureDefaultRoster } from './roster';
 
 const STORAGE_KEY = 'shotsheet-season-v1';
@@ -41,8 +42,59 @@ function normalizeShot(s: ShotEvent): ShotEvent {
   return { ...s, period, strength };
 }
 
+/**
+ * Old full-rink horizontal → new vertical half (goal at top).
+ *
+ * Legacy image was a landscape full sheet. The half view cropped to the
+ * attack half `x ∈ [0.5, 1]` (right = attack goal; y = top→bottom boards).
+ * That half, rotated 90° CCW, is the new portrait image (goal at top,
+ * center ice at bottom, old top boards become left boards).
+ *
+ *   Attack half (x_old >= 0.5): new_x = y_old; new_y = 2 * (1 - x_old)
+ *   Other end   (x_old < 0.5):  new_x = y_old; new_y = 2 * x_old
+ *
+ * Idempotent when `season.coordSpace === 'vert-half-v1'`.
+ */
+export function migrateShotCoords(xOld: number, yOld: number): { x: number; y: number } {
+  if (xOld >= 0.5) {
+    return { x: yOld, y: 2 * (1 - xOld) };
+  }
+  return { x: yOld, y: 2 * xOld };
+}
+
+export function seasonInVertHalfSpace(season: Pick<SeasonStore, 'coordSpace'>): boolean {
+  return season.coordSpace === COORD_SPACE_VERT_HALF;
+}
+
+export function migrateSeasonCoordSpace(season: SeasonStore): SeasonStore {
+  if (seasonInVertHalfSpace(season)) return season;
+  const shots = season.shots.map((s) => {
+    if (typeof s.x !== 'number' || typeof s.y !== 'number') return s;
+    const { x, y } = migrateShotCoords(s.x, s.y);
+    return { ...s, x, y };
+  });
+  return { ...season, version: 1, coordSpace: COORD_SPACE_VERT_HALF, shots };
+}
+
+function hydrateSeason(parsed: SeasonStore): SeasonStore {
+  const loaded: SeasonStore = {
+    version: 1,
+    coordSpace: parsed.coordSpace,
+    games: parsed.games ?? [],
+    players: ensureDefaultRoster(parsed.players ?? []),
+    shots: (parsed.shots ?? []).map(normalizeShot),
+  };
+  return migrateSeasonCoordSpace(loaded);
+}
+
 export function emptySeason(): SeasonStore {
-  return { version: 1, games: [], players: ensureDefaultRoster([]), shots: [] };
+  return {
+    version: 1,
+    coordSpace: COORD_SPACE_VERT_HALF,
+    games: [],
+    players: ensureDefaultRoster([]),
+    shots: [],
+  };
 }
 
 export function loadSeason(): SeasonStore {
@@ -51,12 +103,12 @@ export function loadSeason(): SeasonStore {
     if (!raw) return emptySeason();
     const parsed = JSON.parse(raw) as SeasonStore;
     if (!parsed || parsed.version !== 1) return emptySeason();
-    return {
-      version: 1,
-      games: parsed.games ?? [],
-      players: ensureDefaultRoster(parsed.players ?? []),
-      shots: (parsed.shots ?? []).map(normalizeShot),
-    };
+    const season = hydrateSeason(parsed);
+    // Persist the flag + remapped shots so a later load does not double-migrate.
+    if (!seasonInVertHalfSpace(parsed)) {
+      saveSeason(season);
+    }
+    return season;
   } catch {
     return emptySeason();
   }
@@ -73,12 +125,13 @@ export function exportSeasonJson(season: SeasonStore): string {
 export function importSeasonJson(json: string): SeasonStore {
   const parsed = JSON.parse(json) as SeasonStore;
   if (!parsed || typeof parsed !== 'object') throw new Error('Invalid season JSON');
-  return {
+  return hydrateSeason({
     version: 1,
+    coordSpace: parsed.coordSpace,
     games: Array.isArray(parsed.games) ? parsed.games : [],
-    players: ensureDefaultRoster(Array.isArray(parsed.players) ? parsed.players : []),
-    shots: (Array.isArray(parsed.shots) ? parsed.shots : []).map(normalizeShot),
-  };
+    players: Array.isArray(parsed.players) ? parsed.players : [],
+    shots: Array.isArray(parsed.shots) ? parsed.shots : [],
+  });
 }
 
 export function uid(prefix = 'id'): string {

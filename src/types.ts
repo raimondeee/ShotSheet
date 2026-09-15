@@ -13,8 +13,10 @@ export type Strength = 'EV' | 'PP' | 'SH';
 export type StrengthFilter = Strength | 'all';
 export type OutcomeFilter = Outcome | 'all';
 export type UiMode = 'place' | 'review';
-export type RinkExtent = 'half' | 'full';
 export type AppScreen = 'home' | 'chart' | 'reports';
+/** Shot x/y are normalized 0–1 in the vertical half-rink image (goal at top). */
+export type CoordSpace = 'vert-half-v1';
+export const COORD_SPACE_VERT_HALF: CoordSpace = 'vert-half-v1';
 
 export interface Player {
   id: string;
@@ -42,7 +44,11 @@ export interface ShotEvent {
   gameId: string;
   side: Side;
   outcome: Outcome;
-  /** Normalized 0–1 relative to rink image; undefined = unplaced (click to place) */
+  /**
+   * Normalized 0–1 in the vertical half image (top-left origin).
+   * x: left boards → right boards; y: goal end (top) → center ice (bottom).
+   * Undefined = unplaced (click to place).
+   */
   x?: number;
   y?: number;
   /** Shooter when side=for */
@@ -65,6 +71,11 @@ export interface ShotEvent {
 
 export interface SeasonStore {
   version: 1;
+  /**
+   * Coordinate space for shot x/y. Missing / any other value means legacy
+   * full-horizontal rink coords and is migrated once on load/import.
+   */
+  coordSpace?: CoordSpace;
   games: Game[];
   players: Player[];
   shots: ShotEvent[];

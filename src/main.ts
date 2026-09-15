@@ -5,7 +5,6 @@ import type {
   Outcome,
   Period,
   PlotMode,
-  RinkExtent,
   SeasonStore,
   ShotEvent,
   Side,
@@ -21,6 +20,7 @@ import {
   formatGameLabel,
   importSeasonJson,
   loadSeason,
+  migrateSeasonCoordSpace,
   periodLabel,
   removeShot,
   saveSeason,
@@ -75,8 +75,7 @@ let reviewEditing = false;
 let showHeatmap = true;
 /** Place: default hidden; Review: default on — applied on mode switch */
 let showMarkers = false;
-let rinkExtent: RinkExtent = 'half';
-/** When true: show other end + mirror so attack direction stays consistent */
+/** When true: CSS scaleX(-1) on the stage — same vertical half, mirrored */
 let attackFlip = false;
 /** Chart Settings modal (opponent / date / location / film) */
 let settingsOpen = false;
@@ -146,6 +145,7 @@ function goto(next: AppScreen) {
 }
 
 function persist() {
+  season = migrateSeasonCoordSpace(season);
   saveSeason(season);
 }
 
@@ -535,38 +535,21 @@ function gameHasIdentifyingMeta(g: { opponent?: string; date?: string; location?
 }
 
 /**
- * Map click in visible wrap (0–1) → full-rink normalized coords.
- * Visual space is after CSS horizontal mirror; stored space is absolute rink image.
+ * Map click in visible wrap (0–1) → stored vertical-half image coords.
+ * Stored space is the unflipped image (goal at top). Visual space is after
+ * CSS `scaleX(-1)` when attackFlip is on.
  */
 function viewToRink(nx: number, ny: number): { x: number; y: number } {
-  if (rinkExtent === 'full') {
-    return {
-      x: attackFlip ? 1 - nx : nx,
-      y: ny,
-    };
-  }
-  // Half: default shows attack half x∈[0.5,1]; flip shows other end mirrored
-  if (!attackFlip) {
-    return { x: 0.5 + nx * 0.5, y: ny };
-  }
-  // Mirrored left half so attack goal stays on the visual right
-  return { x: 0.5 - nx * 0.5, y: ny };
+  return { x: attackFlip ? 1 - nx : nx, y: ny };
 }
 
-/** Inverse of viewToRink: stored rink → visible wrap normalized (for hit-testing). */
+/** Inverse of viewToRink: stored image → visible wrap (heatmap, markers, hit-test). */
 function rinkToView(x: number, y: number): { nx: number; ny: number } {
-  if (rinkExtent === 'full') {
-    return { nx: attackFlip ? 1 - x : x, ny: y };
-  }
-  if (!attackFlip) {
-    return { nx: (x - 0.5) / 0.5, ny: y };
-  }
-  return { nx: (0.5 - x) / 0.5, ny: y };
+  return { nx: attackFlip ? 1 - x : x, ny: y };
 }
 
 function rinkWrapClasses(): string {
   const parts = ['rink-wrap'];
-  if (rinkExtent === 'half') parts.push('half');
   if (attackFlip) parts.push('flipped');
   if (screen === 'reports') parts.push('mode-reports');
   else {
@@ -614,13 +597,15 @@ function headerHtml(): string {
     </header>`;
 }
 
-function persistButtonsHtml(): string {
+function persistButtonsHtml(jsonId = 'json-file'): string {
   return `
             <div class="row">
               <button type="button" class="ghost" data-action="export-json">Export JSON</button>
-              <label class="btn ghost" style="margin:0">Import JSON<input type="file" id="json-file" accept="application/json,.json" hidden /></label>
             </div>
-            <p class="hint">Season stored in <code>localStorage</code>.</p>`;
+            <label class="field">Import JSON
+              <input type="file" id="${jsonId}" class="json-file-input" accept=".json,application/json" />
+            </label>
+            <p class="hint">Season stored in <code>localStorage</code>. On iPad, use the native file control (not a hidden button). After a deploy, hard-refresh or delete &amp; re-add the Home Screen icon if the PWA looks stale.</p>`;
 }
 
 function statsInnerHtml(shots: ShotEvent[]): string {
@@ -675,11 +660,7 @@ function rinkBlockHtml(title: string, extraToolbar: string): string {
   return `
         <div class="toolbar-rink">
           <span class="status-pill">${esc(title)}</span>
-          <div class="mode-toggle compact" title="Rink view">
-            <button type="button" data-action="extent" data-extent="half" class="${rinkExtent === 'half' ? 'active' : ''}">Half</button>
-            <button type="button" data-action="extent" data-extent="full" class="${rinkExtent === 'full' ? 'active' : ''}">Full</button>
-          </div>
-          <button type="button" class="ghost ${attackFlip ? 'active-flip' : ''}" data-action="flip-attack" title="Show other end / keep attack direction">Attacking other end</button>
+          <button type="button" class="ghost ${attackFlip ? 'active-flip' : ''}" data-action="flip-attack" title="Horizontal mirror of this half (attacking the other end)">Attacking other end</button>
           <label class="row" style="gap:0.35rem;font-size:0.8rem;color:var(--muted)">
             <input type="checkbox" id="tog-heat" ${showHeatmap ? 'checked' : ''} /> Heatmap
           </label>
@@ -692,10 +673,10 @@ function rinkBlockHtml(title: string, extraToolbar: string): string {
 
         <div class="${rinkWrapClasses()}" id="rink-wrap" title="${rinkTitle}">
           <div class="rink-stage" id="rink-stage">
-            <img class="rink" id="rink-img" src="${ASSET_BASE}rink-background.jpg" alt="Hockey rink" draggable="false" />
-            <canvas class="heat" id="heat-canvas"></canvas>
-            <div class="markers" id="markers"></div>
+            <img class="rink" id="rink-img" src="${ASSET_BASE}rink-half-vert.jpg" alt="Hockey rink (attack half, goal at top)" draggable="false" />
           </div>
+          <canvas class="heat" id="heat-canvas"></canvas>
+          <div class="markers" id="markers"></div>
           ${
             stackPicker && stackPicker.length > 1 && screen === 'chart'
               ? `<div class="stack-picker" id="stack-picker">
@@ -924,6 +905,14 @@ function settingsModalHtml(game: { opponent?: string; date?: string; location?: 
             <button type="button" class="primary" data-action="save-game">Save</button>
             <button type="button" class="ghost" data-action="close-settings">Cancel</button>
           </div>
+          <h2>Import</h2>
+          <p class="hint">Native file controls — iPad Safari / Home Screen cannot open a hidden file input.</p>
+          <label class="field">CSV import
+            <input type="file" id="csv-file-settings" class="csv-file-input" accept=".csv,text/csv" />
+          </label>
+          <label class="field">Import JSON
+            <input type="file" id="json-file-settings" class="json-file-input" accept=".json,application/json" />
+          </label>
         </div>
       </div>
     </div>`;
@@ -1330,7 +1319,7 @@ function renderChart() {
             <div class="stack">
               <p class="hint">CSV seeds unplaced events for <strong>this game</strong>.</p>
               <label class="field">CSV import
-                <input type="file" id="csv-file" accept=".csv,text/csv" />
+                <input type="file" id="csv-file" class="csv-file-input" accept=".csv,text/csv" />
               </label>
               <button type="button" class="ghost" data-action="load-sample">Load sample-game.csv</button>
               ${persistButtonsHtml()}
@@ -1360,14 +1349,19 @@ function paintRink(shots: ShotEvent[]) {
   if (!wrap || !stage || !img || !canvas || !markers) return;
 
   const syncSize = () => {
-    const w = stage.clientWidth;
-    const h = stage.clientHeight;
+    const w = wrap.clientWidth;
+    const h = wrap.clientHeight;
     if (w < 10 || h < 10) return;
     if (canvas.width !== w || canvas.height !== h) {
       canvas.width = w;
       canvas.height = h;
     }
-    if (showHeatmap) drawHeatmap(canvas, shots);
+    const viewShots = shots.map((s) => {
+      if (typeof s.x !== 'number' || typeof s.y !== 'number') return s;
+      const { nx, ny } = rinkToView(s.x, s.y);
+      return { ...s, x: nx, y: ny };
+    });
+    if (showHeatmap) drawHeatmap(canvas, viewShots);
     else {
       const ctx = canvas.getContext('2d');
       ctx?.clearRect(0, 0, canvas.width, canvas.height);
@@ -1382,12 +1376,13 @@ function paintRink(shots: ShotEvent[]) {
     const peNone = screen !== 'chart' || uiMode === 'place';
     for (const s of shots) {
       if (typeof s.x !== 'number' || typeof s.y !== 'number') continue;
+      const { nx, ny } = rinkToView(s.x, s.y);
       const el = document.createElement('button');
       el.type = 'button';
       const isSel = screen === 'chart' && selectedShotId === s.id;
       el.className = `marker ${s.outcome}${isSel ? ' selected' : ''}${isSel ? ' pulse' : ''}`;
-      el.style.left = `${s.x * 100}%`;
-      el.style.top = `${s.y * 100}%`;
+      el.style.left = `${nx * 100}%`;
+      el.style.top = `${ny * 100}%`;
       if (peNone) el.style.pointerEvents = 'none';
       el.title = `${outcomeLabel(s.outcome)} · ${s.side === 'for' ? playerName(s.playerId) : playerName(s.goalieId)} · P${periodLabel(s.period)}`;
       el.dataset.shotId = s.id;
@@ -1686,6 +1681,7 @@ function applyCsv(text: string, label?: string) {
     });
     season = result.season;
     setActiveGame(result.gameId);
+    settingsOpen = false;
     persist();
     toast(`Imported ${result.imported} events (${result.skipped} skipped). Place them on the rink.`);
     screen = 'chart';
@@ -1809,13 +1805,6 @@ function bind() {
     btn.addEventListener('click', () => {
       plotMode = (btn as HTMLElement).dataset.mode as PlotMode;
       placingShotId = null;
-      render();
-    });
-  });
-
-  document.querySelectorAll('[data-action="extent"]').forEach((btn) => {
-    btn.addEventListener('click', () => {
-      rinkExtent = (btn as HTMLElement).dataset.extent as RinkExtent;
       render();
     });
   });
@@ -2022,27 +2011,35 @@ function bind() {
     URL.revokeObjectURL(a.href);
   });
 
-  document.getElementById('csv-file')?.addEventListener('change', async (e) => {
-    const file = (e.target as HTMLInputElement).files?.[0];
-    if (!file) return;
-    applyCsv(await file.text(), file.name.replace(/\.csv$/i, ''));
+  document.querySelectorAll<HTMLInputElement>('#csv-file, .csv-file-input').forEach((el) => {
+    el.addEventListener('change', async (e) => {
+      const input = e.target as HTMLInputElement;
+      const file = input.files?.[0];
+      if (!file) return;
+      applyCsv(await file.text(), file.name.replace(/\.csv$/i, ''));
+      input.value = '';
+    });
   });
 
-  document.getElementById('json-file')?.addEventListener('change', async (e) => {
-    const file = (e.target as HTMLInputElement).files?.[0];
-    if (!file) return;
-    try {
-      season = importSeasonJson(await file.text());
-      if (activeGameId && !season.games.some((g) => g.id === activeGameId)) {
-        setActiveGame(season.games[0]?.id ?? null);
+  document.querySelectorAll<HTMLInputElement>('#json-file, .json-file-input').forEach((el) => {
+    el.addEventListener('change', async (e) => {
+      const input = e.target as HTMLInputElement;
+      const file = input.files?.[0];
+      if (!file) return;
+      try {
+        season = importSeasonJson(await file.text());
+        if (activeGameId && !season.games.some((g) => g.id === activeGameId)) {
+          setActiveGame(season.games[0]?.id ?? null);
+        }
+        filters = { ...defaultFilters(), gameId: activeGameId ?? 'all' };
+        persist();
+        toast('Season JSON imported');
+        goto('home');
+      } catch (err) {
+        toast(`JSON import failed: ${err}`, 'error');
       }
-      filters = { ...defaultFilters(), gameId: activeGameId ?? 'all' };
-      persist();
-      toast('Season JSON imported');
-      goto('home');
-    } catch (err) {
-      toast(`JSON import failed: ${err}`, 'error');
-    }
+      input.value = '';
+    });
   });
 
   document.querySelectorAll('[data-place]').forEach((el) => {
