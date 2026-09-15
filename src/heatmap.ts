@@ -2,7 +2,8 @@ import type { ShotEvent } from './types';
 
 /**
  * Simple Gaussian density heatmap drawn to canvas.
- * Inspired by common shot-chart heatmaps (not a copy of any specific tool).
+ * Callers must pass shots already mapped into the same view space as markers
+ * (wrap-normalized coords from `rinkToView`).
  */
 export function drawHeatmap(
   canvas: HTMLCanvasElement,

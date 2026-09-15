@@ -113,7 +113,14 @@ select, input[type="text"], input[type="url"], input[type="file"], input[type="d
   font-size: 0.9rem;
 }
 
-input[type="file"] { font-size: 0.78rem; padding: 0.35rem; }
+input[type="file"] {
+  font-size: 16px; /* iOS: avoid zoom on focus; keep native control visible */
+  padding: 0.45rem 0.4rem;
+  min-height: 44px;
+  width: 100%;
+  opacity: 1;
+  position: static;
+}
 
 button, .btn {
   appearance: none;
@@ -206,7 +213,7 @@ button.active-flip {
 
 .breakdown th { color: var(--muted); font-weight: 600; font-size: 0.72rem; }
 
-/* —— Rink / half-sheet —— */
+/* —— Rink (vertical half-sheet, 1:1 in wrap) —— */
 .rink-wrap {
   position: relative;
   width: 100%;
@@ -231,23 +238,8 @@ button.active-flip {
   display: block;
 }
 
-/* Half: crop to offensive (right) half; flipped: other end + horizontal mirror */
-.rink-wrap.half .rink-stage {
-  width: 200%;
-  margin-left: -100%;
-}
-
-/* Show left half, mirror so attack goal stays on the visual right (user POV fixed) */
-.rink-wrap.half.flipped .rink-stage {
-  margin-left: 0;
-  transform: scaleX(-1);
-  -webkit-transform: scaleX(-1);
-  transform-origin: 25% center;
-  -webkit-transform-origin: 25% center;
-}
-
-/* Full rink: mirror entire sheet horizontally */
-.rink-wrap:not(.half).flipped .rink-stage {
+/* Attacking other end: horizontal mirror of this same vertical half */
+.rink-wrap.flipped .rink-stage {
   transform: scaleX(-1);
   -webkit-transform: scaleX(-1);
   transform-origin: center center;
@@ -269,6 +261,7 @@ button.active-flip {
   height: 100%;
   pointer-events: none;
   opacity: 0.85;
+  z-index: 1;
 }
 
 .rink-wrap.has-selection #heat-canvas {
@@ -279,6 +272,7 @@ button.active-flip {
   position: absolute;
   inset: 0;
   pointer-events: none;
+  z-index: 2;
 }
 
 .marker {
